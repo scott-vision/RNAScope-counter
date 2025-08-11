@@ -51,7 +51,8 @@ class ROIImageLabel(QLabel):
     def __init__(self, array: np.ndarray, parent=None):
         super().__init__(parent)
         self.setPixmap(array_to_pixmap(array))
-        self._rubber = QRubberBand(QRubberBand.Rectangle, self)
+        band_shape = getattr(QRubberBand, "Shape", QRubberBand)
+        self._rubber = QRubberBand(band_shape.Rectangle, self)
         self._origin = QPoint()
 
     def mousePressEvent(self, event):  # type: ignore[override]
@@ -166,8 +167,8 @@ def run_app(
 ):
     app = QApplication(sys.argv)
     pixel_spacing, ok = QInputDialog.getDouble(
-        None, "Pixel Spacing", "Microns per pixel:", 0.4475, 0
-        )
+        None, "Pixel Spacing", "Microns per pixel:", 0.4475, 0, 1e6, 4
+    )
     if not ok:
         pixel_spacing = 0.4475
     win = RNAScopeCounterApp(
