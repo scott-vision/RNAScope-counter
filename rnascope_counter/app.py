@@ -4,14 +4,14 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 from PyQt6.QtCore import QPoint, QRect, QSize, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPainter
 from PyQt6.QtWidgets import (
     QApplication,
-    QLabel,
     QMessageBox,
     QMainWindow,
     QRubberBand,
     QInputDialog,
+    QWidget,
 )
 from skimage.feature import peak_local_max
 import tifffile
@@ -34,7 +34,13 @@ def load_image(path: str, already_max_projected: bool = False) -> np.ndarray:
     raise ValueError("Expected 3-channel image")
 
 
-def array_to_pixmap(arr: np.ndarray) -> QPixmap:
+def array_to_qimage(arr: np.ndarray) -> QImage:
+    """Convert a 2D array to a grayscale QImage.
+
+    QPixmap on Windows relies on the GDI API which cannot handle images
+    larger than 32767 pixels in either dimension (CreateDIBSection fails).
+    Returning a QImage allows us to paint the image without that limitation.
+    """
     arr = arr.astype(float)
     arr -= arr.min()
     if arr.max() > 0:
@@ -42,18 +48,29 @@ def array_to_pixmap(arr: np.ndarray) -> QPixmap:
     arr = (arr * 255).astype(np.uint8)
     h, w = arr.shape
     image = QImage(arr.data, w, h, w, QImage.Format.Format_Grayscale8)
-    return QPixmap.fromImage(image)
+    # copy to detach from numpy memory
+    return image.copy()
 
 
-class ROIImageLabel(QLabel):
+class ROIImageLabel(QWidget):
     roiSelected = pyqtSignal(QRect)
 
     def __init__(self, array: np.ndarray, parent=None):
         super().__init__(parent)
-        self.setPixmap(array_to_pixmap(array))
+        self._image = array_to_qimage(array)
+        self.setFixedSize(self._image.size())
         band_shape = getattr(QRubberBand, "Shape", QRubberBand)
         self._rubber = QRubberBand(band_shape.Rectangle, self)
         self._origin = QPoint()
+
+    def set_array(self, array: np.ndarray):
+        self._image = array_to_qimage(array)
+        self.setFixedSize(self._image.size())
+        self.update()
+
+    def paintEvent(self, event):  # type: ignore[override]
+        painter = QPainter(self)
+        painter.drawImage(0, 0, self._image)
 
     def mousePressEvent(self, event):  # type: ignore[override]
         self._origin = event.position().toPoint()
@@ -126,7 +143,7 @@ class RNAScopeCounterApp(QMainWindow):
                 self.current_image = "thalamus"
                 self.expected_rois = ["Thalamus"]
                 self.current_roi_index = 0
-                self.image_label.setPixmap(array_to_pixmap(self.thal_channels[0]))
+                self.image_label.set_array(self.thal_channels[0])
                 self.statusBar().showMessage("Select ROI for Thalamus")
             else:
                 self.finish()
