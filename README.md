@@ -20,11 +20,16 @@ Then provides analysis of each reigon defined, including:
 - Number of spots in GOA/GOB channel
 - Intensity of spots
 - Average spot intensity
+- Spots per square micron
 
 Output is saved to CSV file
 
 ## Usage
 
 ```bash
-python -m rnascope_counter --hippocampus path/to/hippo.tif --thalamus path/to/thalamus.tif --output results.csv
+python -m rnascope_counter --hippocampus path/to/hippo.tif --thalamus path/to/thalamus.tif --output results.csv [--max-projected]
 ```
+
+At startup the application prompts for the pixel spacing in microns per pixel (default `0.4475`).
+This value is used to compute the area of each ROI and the corresponding spot density.
+Use the `--max-projected` flag if the provided images are already maximum projected.
