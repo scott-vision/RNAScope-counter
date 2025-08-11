@@ -11,15 +11,20 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QMainWindow,
     QRubberBand,
+    QInputDialog,
 )
 from skimage.feature import peak_local_max
 import tifffile
 
 
-def load_image(path: str) -> np.ndarray:
+def load_image(path: str, already_max_projected: bool = False) -> np.ndarray:
     """Load a TIFF image and return channels as (C, H, W) array."""
     data = tifffile.imread(path)
     if data.ndim == 4:
+        if already_max_projected:
+            raise ValueError(
+                "Image flagged as already max-projected but still has a z dimension"
+            )
         # assume (z, c, y, x)
         data = data.max(axis=0)
     if data.ndim == 3 and data.shape[0] == 3:
@@ -63,7 +68,9 @@ class ROIImageLabel(QLabel):
         self.roiSelected.emit(rect)
 
 
-def analyze(channel: np.ndarray, rect: QRect, threshold: float = 100) -> Tuple[int, float, float]:
+def analyze(
+    channel: np.ndarray, rect: QRect, pixel_spacing: float, threshold: float = 100
+) -> Tuple[int, float, float, float]:
     x, y, w, h = rect.left(), rect.top(), rect.width(), rect.height()
     sub = channel[y : y + h, x : x + w]
     coords = peak_local_max(sub, min_distance=2, threshold_abs=threshold)
@@ -71,15 +78,25 @@ def analyze(channel: np.ndarray, rect: QRect, threshold: float = 100) -> Tuple[i
     count = int(len(intensities))
     total = float(np.sum(intensities)) if count else 0.0
     avg = float(np.mean(intensities)) if count else 0.0
-    return count, total, avg
+    area_sq_micron = (w * pixel_spacing) * (h * pixel_spacing)
+    density = count / area_sq_micron if area_sq_micron > 0 else 0.0
+    return count, total, avg, density
 
 
 class RNAScopeCounterApp(QMainWindow):
-    def __init__(self, hippo_path: str, thal_path: str, output_path: str):
+    def __init__(
+        self,
+        hippo_path: str,
+        thal_path: str,
+        output_path: str,
+        pixel_spacing: float,
+        max_projected: bool,
+    ):
         super().__init__()
-        self.hipp_channels = load_image(hippo_path)
-        self.thal_channels = load_image(thal_path)
+        self.hipp_channels = load_image(hippo_path, already_max_projected=max_projected)
+        self.thal_channels = load_image(thal_path, already_max_projected=max_projected)
         self.output_path = output_path
+        self.pixel_spacing = pixel_spacing
         self.hipp_rois: Dict[str, QRect] = {}
         self.thal_rois: Dict[str, QRect] = {}
 
@@ -117,22 +134,44 @@ class RNAScopeCounterApp(QMainWindow):
         results: List[List[object]] = []
         for region, rect in self.hipp_rois.items():
             for chan_name, chan_idx in [("GOB", 1), ("GOA", 2)]:
-                count, total, avg = analyze(self.hipp_channels[chan_idx], rect)
-                results.append([region, chan_name, count, total, avg])
+                count, total, avg, density = analyze(
+                    self.hipp_channels[chan_idx], rect, self.pixel_spacing
+                )
+                results.append([region, chan_name, count, total, avg, density])
         for region, rect in self.thal_rois.items():
             for chan_name, chan_idx in [("GOB", 1), ("GOA", 2)]:
-                count, total, avg = analyze(self.thal_channels[chan_idx], rect)
-                results.append([region, chan_name, count, total, avg])
+                count, total, avg, density = analyze(
+                    self.thal_channels[chan_idx], rect, self.pixel_spacing
+                )
+                results.append([region, chan_name, count, total, avg, density])
         with open(self.output_path, "w", newline="") as f:
             writer = csv.writer(f)
-            writer.writerow(["Region", "Channel", "SpotCount", "TotalIntensity", "AverageIntensity"])
+            writer.writerow(
+                [
+                    "Region",
+                    "Channel",
+                    "SpotCount",
+                    "TotalIntensity",
+                    "AverageIntensity",
+                    "SpotsPerSquareMicron",
+                ]
+            )
             writer.writerows(results)
         QMessageBox.information(self, "RNAScope Counter", f"Results saved to {self.output_path}")
         QApplication.quit()
 
 
-def run_app(hippo_path: str, thal_path: str, output_path: str):
+def run_app(
+    hippo_path: str, thal_path: str, output_path: str, max_projected: bool = False
+):
     app = QApplication(sys.argv)
-    win = RNAScopeCounterApp(hippo_path, thal_path, output_path)
+    pixel_spacing, ok = QInputDialog.getDouble(
+        None, "Pixel Spacing", "Microns per pixel:", 0.4475, 0
+        )
+    if not ok:
+        pixel_spacing = 0.4475
+    win = RNAScopeCounterApp(
+        hippo_path, thal_path, output_path, pixel_spacing, max_projected
+    )
     win.show()
     app.exec()
