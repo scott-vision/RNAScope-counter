@@ -4,16 +4,17 @@ from typing import Dict, List, Tuple
 
 import numpy as np
 from PyQt6.QtCore import QPoint, QRect, QSize, pyqtSignal
-from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtGui import QImage, QPainter
 from PyQt6.QtWidgets import (
     QApplication,
-    QLabel,
     QMessageBox,
     QMainWindow,
     QRubberBand,
     QInputDialog,
+    QWidget,
 )
 from skimage.feature import peak_local_max
+from skimage.transform import rescale
 import tifffile
 
 
@@ -34,7 +35,13 @@ def load_image(path: str, already_max_projected: bool = False) -> np.ndarray:
     raise ValueError("Expected 3-channel image")
 
 
-def array_to_pixmap(arr: np.ndarray) -> QPixmap:
+def array_to_qimage(arr: np.ndarray) -> QImage:
+    """Convert a 2D array to a grayscale QImage.
+
+    QPixmap on Windows relies on the GDI API which cannot handle images
+    larger than 32767 pixels in either dimension (CreateDIBSection fails).
+    Returning a QImage allows us to paint the image without that limitation.
+    """
     arr = arr.astype(float)
     arr -= arr.min()
     if arr.max() > 0:
@@ -42,18 +49,46 @@ def array_to_pixmap(arr: np.ndarray) -> QPixmap:
     arr = (arr * 255).astype(np.uint8)
     h, w = arr.shape
     image = QImage(arr.data, w, h, w, QImage.Format.Format_Grayscale8)
-    return QPixmap.fromImage(image)
+    # copy to detach from numpy memory
+    return image.copy()
 
 
-class ROIImageLabel(QLabel):
+def prepare_for_display(arr: np.ndarray) -> Tuple[np.ndarray, float]:
+    """Scale down the array if it exceeds 32767 in any dimension.
+
+    Returns the possibly resized array and the scale factor applied
+    (1.0 means no resizing). Rescaling avoids hitting the Windows GDI
+    CreateDIBSection limit when painting very large images."""
+    h, w = arr.shape
+    max_dim = max(h, w)
+    if max_dim <= 32767:
+        return arr, 1.0
+    scale = 32767 / max_dim
+    resized = rescale(arr, scale, order=1, anti_aliasing=False, preserve_range=True)
+    return resized.astype(arr.dtype), scale
+
+
+class ROIImageLabel(QWidget):
     roiSelected = pyqtSignal(QRect)
 
     def __init__(self, array: np.ndarray, parent=None):
         super().__init__(parent)
-        self.setPixmap(array_to_pixmap(array))
+        display, self._scale = prepare_for_display(array)
+        self._image = array_to_qimage(display)
+        self.setFixedSize(self._image.size())
         band_shape = getattr(QRubberBand, "Shape", QRubberBand)
         self._rubber = QRubberBand(band_shape.Rectangle, self)
         self._origin = QPoint()
+
+    def set_array(self, array: np.ndarray):
+        display, self._scale = prepare_for_display(array)
+        self._image = array_to_qimage(display)
+        self.setFixedSize(self._image.size())
+        self.update()
+
+    def paintEvent(self, event):  # type: ignore[override]
+        painter = QPainter(self)
+        painter.drawImage(0, 0, self._image)
 
     def mousePressEvent(self, event):  # type: ignore[override]
         self._origin = event.position().toPoint()
@@ -66,6 +101,13 @@ class ROIImageLabel(QLabel):
     def mouseReleaseEvent(self, event):  # type: ignore[override]
         self._rubber.hide()
         rect = self._rubber.geometry()
+        if self._scale != 1.0:
+            rect = QRect(
+                int(rect.left() / self._scale),
+                int(rect.top() / self._scale),
+                int(rect.width() / self._scale),
+                int(rect.height() / self._scale),
+            )
         self.roiSelected.emit(rect)
 
 
@@ -126,7 +168,7 @@ class RNAScopeCounterApp(QMainWindow):
                 self.current_image = "thalamus"
                 self.expected_rois = ["Thalamus"]
                 self.current_roi_index = 0
-                self.image_label.setPixmap(array_to_pixmap(self.thal_channels[0]))
+                self.image_label.set_array(self.thal_channels[0])
                 self.statusBar().showMessage("Select ROI for Thalamus")
             else:
                 self.finish()
