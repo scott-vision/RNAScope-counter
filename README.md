@@ -1,6 +1,6 @@
 # RNAScope-counter
 
-User interface for spot counting and intensity calculation for RNAScope analysis. 
+User interface for spot counting and intensity calculation for RNAScope analysis.
 
 PyQt6 interface to open 3-channel large montages, define a ROI for each section of the Brain, then uses find maxima to detect spots.
 
@@ -22,3 +22,9 @@ Then provides analysis of each reigon defined, including:
 - Average spot intensity
 
 Output is saved to CSV file
+
+## Usage
+
+```bash
+python -m rnascope_counter --hippocampus path/to/hippo.tif --thalamus path/to/thalamus.tif --output results.csv
+```
